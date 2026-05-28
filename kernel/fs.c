@@ -1487,6 +1487,8 @@ static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
+  uint seen[100];
+  int nseen = 0;
 
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
@@ -1499,30 +1501,65 @@ namex(char *path, int nameiparent, char *name)
       iunlockput(ip);
       return 0;
     }
+
     if(nameiparent && *path == '\0'){
-      // Stop one level early.
       iunlock(ip);
       return ip;
     }
+
     if((next = dirlookup(ip, name, 0)) == 0){
       iunlockput(ip);
       return 0;
     }
+
     iunlockput(ip);
     ip = next;
 
-    /* To do: symlinkdir
+    // Follow symbolic links only when this is an intermediate component.
+    // Example: /testsymlink3/q/p, q must be followed before resolving p.
+    while(*path != '\0'){
+      ilock(ip);
 
+      if(ip->type != T_SYMLINK){
+        iunlock(ip);
+        break;
+      }
 
-    */
+      if(nseen >= 100){
+        iunlockput(ip);
+        return 0;
+      }
+
+      for(int i = 0; i < nseen; i++){
+        if(seen[i] == ip->inum){
+          iunlockput(ip);
+          return 0;
+        }
+      }
+      seen[nseen++] = ip->inum;
+
+      char target[MAXPATH];
+      int len = readi(ip, 0, (uint64)target, 0, MAXPATH - 1);
+      if(len < 0){
+        iunlockput(ip);
+        return 0;
+      }
+      target[len] = '\0';
+
+      iunlockput(ip);
+
+      if((ip = namei(target)) == 0)
+        return 0;
+    }
   }
+
   if(nameiparent){
     iput(ip);
     return 0;
   }
+
   return ip;
 }
-
 struct inode*
 namei(char *path)
 {
